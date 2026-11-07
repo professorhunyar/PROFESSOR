@@ -1,4 +1,4 @@
-
+import http from 'node:http'
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -554,40 +554,171 @@ async function likeStatus(sock, message) {
   }
 }
 
-// CONNECT BOT
+// CONNECT BOT - WEB PAIRING LOGIN
+let activeSocket = null
+let pairingCodeRequested = false
+let pairingServer = null
+
+async function generatePairingCode(phoneNumber) {
+  const number = String(phoneNumber || '').replace(/\D/g, '')
+
+  if (!/^92\d{10}$/.test(number)) {
+    throw new Error('Pakistan number format: 923XXXXXXXXX')
+  }
+
+  if (!activeSocket) {
+    throw new Error('Bot socket ready nahi. Thori dair baad try karein.')
+  }
+
+  if (pairingCodeRequested) {
+    throw new Error('Pairing code request already process ho rahi hai.')
+  }
+
+  pairingCodeRequested = true
+
+  try {
+    const code = await activeSocket.requestPairingCode(number)
+
+    console.log('================================')
+    console.log('WHATSAPP PAIRING CODE:', code)
+    console.log('================================')
+
+    return code
+  } catch (error) {
+    pairingCodeRequested = false
+    throw error
+  }
+}
+
+function startPairingWebPage() {
+  if (pairingServer) return
+
+  pairingServer = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/') {
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8'
+      })
+
+      return res.end(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Professor Bot Login</title>
+<style>
+body {
+  background:#101827;
+  color:white;
+  font-family:Arial;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  min-height:90vh;
+}
+main {
+  background:#1d293b;
+  padding:25px;
+  border-radius:15px;
+  width:90%;
+  max-width:380px;
+  text-align:center;
+}
+input,button {
+  width:100%;
+  padding:14px;
+  margin-top:15px;
+  box-sizing:border-box;
+  border:0;
+  border-radius:8px;
+  font-size:16px;
+}
+button {
+  background:#20c779;
+  font-weight:bold;
+  cursor:pointer;
+}
+#result {
+  margin-top:20px;
+  font-size:23px;
+  font-weight:bold;
+}
+</style>
+</head>
+<body>
+<main>
+<h2>📱 PROFESSOR BOT</h2>
+<p>Apna WhatsApp Number Enter Karein</p>
+
+<form method="POST" action="/pair">
+<input
+ name="number"
+ placeholder="923001234567"
+ pattern="92[0-9]{10}"
+ required>
+<button type="submit">GENERATE PAIRING CODE</button>
+</form>
+
+<div id="result"></div>
+</main>
+</body>
+</html>
+`)
+    }
+
+    if (req.method === 'POST' && req.url === '/pair') {
+      let body = ''
+
+      req.on('data', chunk => {
+        body += chunk
+        if (body.length > 2000) req.destroy()
+      })
+
+      req.on('end', async () => {
+        try {
+          const number =
+            new URLSearchParams(body).get('number') || ''
+
+          const code = await generatePairingCode(number)
+
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8'
+          })
+
+          res.end(`
+          <html>
+          <body style="background:#101827;color:white;text-align:center;font-family:Arial;padding:40px">
+          <h2>✅ YOUR PAIRING CODE</h2>
+          <h1 style="font-size:35px">${code}</h1>
+          <p>WhatsApp → Linked Devices → Link with phone number instead</p>
+          </body>
+          </html>
+          `)
+        } catch (error) {
+          res.writeHead(400, {
+            'Content-Type': 'text/plain; charset=utf-8'
+          })
+          res.end(error.message)
+        }
+      })
+
+      return
+    }
+
+    res.writeHead(404)
+    res.end('Not Found')
+  })
+
+  const port = Number(process.env.PORT || 3000)
+
+  pairingServer.listen(port, '0.0.0.0', () => {
+    console.log('📱 PROFESSOR BOT PAIRING PAGE STARTED')
+    console.log('PORT:', port)
+  })
+}
+
 async function connect() {
   const { state, saveCreds } =
     await useMultiFileAuthState(AUTH_DIR)
-
-  // CONSOLE NUMBER INPUT FOR FIRST-TIME LOGIN
-  let phoneNumber = ''
-
-  if (!state.creds.registered) {
-    const rl = readline.createInterface({
-      input,
-      output
-    })
-
-    try {
-      console.log('\n================================')
-      console.log('📱 PROFESSOR BOT PAIRING LOGIN')
-      console.log('================================')
-      console.log('Pakistan number format: 923XXXXXXXXX')
-      console.log('Example: 923001234567\n')
-
-      while (!/^92\d{10}$/.test(phoneNumber)) {
-        phoneNumber = (
-          await rl.question('📱 Apna WhatsApp number enter karein: ')
-        ).replace(/\D/g, '')
-
-        if (!/^92\d{10}$/.test(phoneNumber)) {
-          console.log('❌ Number ghalat hai. Example: 923001234567')
-        }
-      }
-    } finally {
-      rl.close()
-    }
-  }
 
   const sock = makeWASocket({
     auth: state,
@@ -598,30 +729,22 @@ async function connect() {
     generateHighQualityLinkPreview: false
   })
 
+  activeSocket = sock
+
+  if (!state.creds.registered) {
+    startPairingWebPage()
+  }
+
   sock.ev.on('creds.update', saveCreds)
 
-  let pairingCodeRequested = false
-
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    // PAIRING CODE LOGIN
-    if (qr && !state.creds.registered && !pairingCodeRequested) {
-      pairingCodeRequested = true
-
-      try {
-        const code = await sock.requestPairingCode(phoneNumber)
-
-        console.log('\n================================')
-        console.log('🔐 WHATSAPP PAIRING CODE:', code)
-        console.log('================================\n')
-        console.log('WhatsApp > Linked Devices > Link with phone number instead')
-      } catch (error) {
-        pairingCodeRequested = false
-        console.error('❌ PAIRING CODE ERROR:', error.message)
-      }
-    }
+  sock.ev.on('connection.update', async ({
+    connection,
+    lastDisconnect
+  }) => {
 
     if (connection === 'open') {
       console.log('✅ PROFESSOR BOT CONNECTED')
+      pairingCodeRequested = false
 
       if (onlineHeartbeat) clearInterval(onlineHeartbeat)
 
@@ -664,6 +787,7 @@ async function connect() {
     }
   })
 
+ 
   // INCOMING MESSAGE EVENTS
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     console.log('📩 MESSAGES UPSERT:', type, messages.length)
