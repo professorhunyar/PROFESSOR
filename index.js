@@ -564,13 +564,24 @@ async function connect() {
   })
 
   sock.ev.on('creds.update', saveCreds)
+let pairingCodeRequested = false
 
-  sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
-      console.log('\nScan QR with WhatsApp > Linked devices:\n')
-     qrcode.generate(qr, { small: false })
+sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+  if (qr && !state.creds.registered && !pairingCodeRequested) {
+    pairingCodeRequested = true
+
+    try {
+      const number = '923XXXXXXXXX' // Apna Pakistani number likho
+      const code = await sock.requestPairingCode(number)
+
+      console.log('\n================================')
+      console.log('🔐 WHATSAPP PAIRING CODE:', code)
+      console.log('================================\n')
+    } catch (error) {
+      pairingCodeRequested = false
+      console.error('PAIRING CODE ERROR:', error)
     }
-
+  }
     if (connection === 'open') {
       console.log('✅ PROFESSOR BOT CONNECTED')
 
