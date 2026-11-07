@@ -6,11 +6,8 @@ import makeWASocket, {
   getContentType
 } from '@whiskeysockets/baileys'
 import pino from 'pino'
-import qrcode from 'qrcode-terminal'
 import fs from 'node:fs'
 import path from 'node:path'
-import readline from 'node:readline/promises'
-import { stdin as input, stdout as output } from 'node:process'
 
 const PREFIX = process.env.PREFIX || '.'
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info'
@@ -50,7 +47,6 @@ try {
 const saveSettings = () =>
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2))
 
-// FORCE FEATURES ON AT STARTUP
 Object.assign(settings, {
   autoStatusView: true,
   saveViewedStatusToSelf: true,
@@ -121,7 +117,6 @@ function getCachedMessage(key) {
 
   if (exact?.message) return exact
 
-  // LID mismatch fallback
   for (const cached of messageCache.values()) {
     if (cached?.key?.id === key.id && cached?.message) {
       console.log('✅ CACHE FOUND BY MESSAGE ID (LID fallback)')
@@ -149,7 +144,6 @@ async function sendToSelf(sock, content) {
 
   await sock.sendMessage(jid, content)
 }
-
 // ANTI DELETE
 async function sendAntiDelete(sock, protocolMessage) {
   const key = protocolMessage?.key
@@ -384,9 +378,7 @@ async function handleQuotedViewOnce(sock, message) {
 
     await sock.sendMessage(
       message.key.remoteJid,
-      {
-        text: ' '
-      },
+      { text: ' ' },
       { quoted: message }
     )
 
@@ -462,7 +454,6 @@ async function saveIncomingViewOnceToSelf(sock, message) {
     return false
   }
 }
-
 // SAVE STATUS TO SELF
 async function saveStatusToSelf(sock, message) {
   try {
@@ -554,9 +545,10 @@ async function likeStatus(sock, message) {
   }
 }
 
-// CONNECT BOT - WEB PAIRING LOGIN
+// PAIRING LOGIN SERVER
 let activeSocket = null
 let pairingCodeRequested = false
+let pairingSocketReady = false
 let pairingServer = null
 
 async function generatePairingCode(phoneNumber) {
@@ -566,12 +558,12 @@ async function generatePairingCode(phoneNumber) {
     throw new Error('Pakistan number format: 923XXXXXXXXX')
   }
 
-  if (!activeSocket) {
-    throw new Error('Bot socket ready nahi. Thori dair baad try karein.')
+  if (!activeSocket || !pairingSocketReady) {
+    throw new Error('WhatsApp connection abhi ready nahi. Kuch dair baad dobara try karein.')
   }
 
   if (pairingCodeRequested) {
-    throw new Error('Pairing code request already process ho rahi hai.')
+    throw new Error('Pairing code request pehle se process ho rahi hai.')
   }
 
   pairingCodeRequested = true
@@ -580,7 +572,7 @@ async function generatePairingCode(phoneNumber) {
     const code = await activeSocket.requestPairingCode(number)
 
     console.log('================================')
-    console.log('WHATSAPP PAIRING CODE:', code)
+    console.log('🔐 WHATSAPP PAIRING CODE:', code)
     console.log('================================')
 
     return code
@@ -599,8 +591,7 @@ function startPairingWebPage() {
         'Content-Type': 'text/html; charset=utf-8'
       })
 
-      return res.end(`
-<!DOCTYPE html>
+      return res.end(`<!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -609,11 +600,12 @@ function startPairingWebPage() {
 body {
   background:#101827;
   color:white;
-  font-family:Arial;
+  font-family:Arial,sans-serif;
   display:flex;
   justify-content:center;
   align-items:center;
   min-height:90vh;
+  margin:0;
 }
 main {
   background:#1d293b;
@@ -622,6 +614,7 @@ main {
   width:90%;
   max-width:380px;
   text-align:center;
+  box-sizing:border-box;
 }
 input,button {
   width:100%;
@@ -637,32 +630,25 @@ button {
   font-weight:bold;
   cursor:pointer;
 }
-#result {
-  margin-top:20px;
-  font-size:23px;
-  font-weight:bold;
-}
 </style>
 </head>
 <body>
 <main>
 <h2>📱 PROFESSOR BOT</h2>
 <p>Apna WhatsApp Number Enter Karein</p>
-
 <form method="POST" action="/pair">
 <input
  name="number"
+ type="tel"
  placeholder="923001234567"
  pattern="92[0-9]{10}"
  required>
 <button type="submit">GENERATE PAIRING CODE</button>
 </form>
-
-<div id="result"></div>
+<p>Pakistan number format: 923XXXXXXXXX</p>
 </main>
 </body>
-</html>
-`)
+</html>`)
     }
 
     if (req.method === 'POST' && req.url === '/pair') {
@@ -684,20 +670,23 @@ button {
             'Content-Type': 'text/html; charset=utf-8'
           })
 
-          res.end(`
-          <html>
-          <body style="background:#101827;color:white;text-align:center;font-family:Arial;padding:40px">
-          <h2>✅ YOUR PAIRING CODE</h2>
-          <h1 style="font-size:35px">${code}</h1>
-          <p>WhatsApp → Linked Devices → Link with phone number instead</p>
-          </body>
-          </html>
-          `)
+          res.end(`<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pairing Code</title>
+</head>
+<body style="background:#101827;color:white;text-align:center;font-family:Arial;padding:40px">
+<h2>✅ YOUR PAIRING CODE</h2>
+<h1 style="font-size:35px;letter-spacing:5px">${code}</h1>
+<p>WhatsApp → Linked Devices → Link with phone number instead</p>
+</body>
+</html>`)
         } catch (error) {
           res.writeHead(400, {
-            'Content-Type': 'text/plain; charset=utf-8'
+            'Content-Type': 'text/html; charset=utf-8'
           })
-          res.end(error.message)
+          res.end(`<h3>❌ ${error.message}</h3><p>Wapas ja kar dobara try karein.</p>`)
         }
       })
 
@@ -710,12 +699,16 @@ button {
 
   const port = Number(process.env.PORT || 3000)
 
+  pairingServer.on('error', error => {
+    console.error('PAIRING WEB SERVER ERROR:', error.message)
+  })
+
   pairingServer.listen(port, '0.0.0.0', () => {
     console.log('📱 PROFESSOR BOT PAIRING PAGE STARTED')
     console.log('PORT:', port)
   })
 }
-
+// CONNECT BOT
 async function connect() {
   const { state, saveCreds } =
     await useMultiFileAuthState(AUTH_DIR)
@@ -730,6 +723,8 @@ async function connect() {
   })
 
   activeSocket = sock
+  pairingSocketReady = false
+  pairingCodeRequested = false
 
   if (!state.creds.registered) {
     startPairingWebPage()
@@ -739,12 +734,19 @@ async function connect() {
 
   sock.ev.on('connection.update', async ({
     connection,
-    lastDisconnect
+    lastDisconnect,
+    qr
   }) => {
+    // QR EVENT MEANS PAIRING REQUEST CAN BE MADE
+    if (qr && !state.creds.registered) {
+      pairingSocketReady = true
+      console.log('📱 WhatsApp pairing is ready. Open the pairing website.')
+    }
 
     if (connection === 'open') {
       console.log('✅ PROFESSOR BOT CONNECTED')
       pairingCodeRequested = false
+      pairingSocketReady = false
 
       if (onlineHeartbeat) clearInterval(onlineHeartbeat)
 
@@ -776,18 +778,24 @@ async function connect() {
     }
 
     if (connection === 'close') {
+      pairingSocketReady = false
+      activeSocket = null
+
       const code = lastDisconnect?.error?.output?.statusCode
 
       if (code !== DisconnectReason.loggedOut) {
         console.log('Connection closed. Reconnecting...')
-        setTimeout(connect, 3000)
+        setTimeout(() => {
+          connect().catch(error => {
+            console.error('Reconnect error:', error)
+          })
+        }, 3000)
       } else {
         console.log('Logged out. Auth folder ko delete na karein.')
       }
     }
   })
 
- 
   // INCOMING MESSAGE EVENTS
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     console.log('📩 MESSAGES UPSERT:', type, messages.length)
@@ -947,8 +955,7 @@ async function connect() {
         await sock.sendMessage(chat, {
           text: `✅ Anti Delete ${settings.antiDelete ? 'ON (' + settings.antiDeleteMode + ')' : 'OFF'}`
         }, { quoted: message })
-
-      } else if (cmd === 'online') {
+              } else if (cmd === 'online') {
         settings.alwaysOnline = value !== 'off'
         saveSettings()
 
