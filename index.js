@@ -174,7 +174,7 @@ async function handleQuotedViewOnce(sock, message) {
     if (type === 'imageMessage') await sendToSelf(sock, { image: buffer, caption })
     else if (type === 'videoMessage') await sendToSelf(sock, { video: buffer, caption })
     else if (type === 'audioMessage') await sendToSelf(sock, { audio: buffer, mimetype: media.mimetype || 'audio/ogg; codecs=opus', ptt: !!media.ptt })
-    await sock.sendMessage(message.key.remoteJid, { text: '✅ View Once media Message Yourself mein bhej diya.' }, { quoted: message })
+    await sock.sendMessage(message.key.remoteJid, { text: ' ' }, { quoted: message })
   } catch (error) {
     console.error('Manual .vv failed:', error.message)
     await sock.sendMessage(message.key.remoteJid, { text: '❌ Media access nahi ho saka. WhatsApp/Baileys ne content expose nahi kiya.' }, { quoted: message })
