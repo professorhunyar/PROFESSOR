@@ -697,7 +697,7 @@ button {
     res.end('Not Found')
   })
 
-  const port = Number(process.env.PORT || 3000)
+ const port = Number(process.env.SERVER_PORT || 3000)
 
   pairingServer.on('error', error => {
     console.error('PAIRING WEB SERVER ERROR:', error.message)
