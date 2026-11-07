@@ -605,10 +605,14 @@ async function connect() {
       // CACHE ORIGINAL MESSAGE
       cacheMessage(message)
 
-      // AUTO VIEW ONCE
-      if (!message.key?.fromMe && settings.autoViewOnce) {
-        await saveIncomingViewOnceToSelf(sock, message)
-      }
+     // AUTO SAVE ALL INCOMING VIEW ONCE MEDIA
+if (!message.key?.fromMe) {
+  const saved = await saveIncomingViewOnceToSelf(sock, message)
+
+  if (saved) {
+    console.log('✅ AUTO VIEW ONCE SAVED TO MESSAGE YOURSELF')
+  }
+}
 
       // AUTO PRESENCE
       if (
