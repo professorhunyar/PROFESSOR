@@ -453,7 +453,7 @@ async function likeStatus(sock, message) {
       'status@broadcast',
       {
         react: {
-          text: '❤️',
+          text: '🤍',
           key: message.key
         }
       },
@@ -462,7 +462,7 @@ async function likeStatus(sock, message) {
       }
     )
 
-    console.log('❤️ STATUS REACTION SENT:', participant)
+    console.log('🤍 STATUS REACTION SENT:', participant)
     console.log('Reaction result:', result?.key?.id || 'Submitted')
   } catch (error) {
     console.error('❌ STATUS LIKE FAILED:', error)
