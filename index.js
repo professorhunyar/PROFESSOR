@@ -237,7 +237,7 @@ async function connect() {
       qrcode.generate(qr, { small: true })
     }
     if (connection === 'open') {
-      console.log('✅ SHAHEEN MINI BOT CONNECTED')
+      console.log('PROFESSOR BOT CONNECTED')
       if (onlineHeartbeat) clearInterval(onlineHeartbeat)
       onlineHeartbeat = setInterval(() => {
         if (settings.alwaysOnline) sock.sendPresenceUpdate('available').catch(() => {})
