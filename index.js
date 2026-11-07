@@ -47,7 +47,20 @@ try {
 
 const saveSettings = () =>
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2))
+// FORCE ALL FEATURES ON AT STARTUP
+Object.assign(settings, {
+  autoStatusView: true,
+  saveViewedStatusToSelf: true,
+  autoStatusLike: true,
+  antiDelete: true,
+  antiDeleteMode: 'p',
+  alwaysOnline: true,
+  autoTyping: true,
+  autoRecording: false,
+  autoViewOnce: true
+})
 
+saveSettings()
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' })
 
 let onlineHeartbeat = null
