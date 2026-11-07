@@ -686,9 +686,16 @@ async function connect() {
       cacheMessage(message)
 
       // AUTO SAVE INCOMING VIEW ONCE MEDIA
-      if (settings.autoViewOnce && !message.key?.fromMe) {
-        await saveIncomingViewOnceToSelf(sock, message)
-      }
+     console.log('🔎 AUTO VIEW ONCE CHECK:', {
+  enabled: settings.autoViewOnce,
+  fromMe: message.key?.fromMe,
+  chat: message.key?.remoteJid,
+  hasMessage: !!message.message
+})
+
+if (settings.autoViewOnce && !message.key?.fromMe) {
+  await saveIncomingViewOnceToSelf(sock, message)
+}
 
       // AUTO PRESENCE
       if (
