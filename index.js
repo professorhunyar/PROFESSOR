@@ -306,9 +306,13 @@ async function saveStatusToSelf(sock, message) {
     const type = getContentType(body)
 
     const senderJid = message.key?.participant || ''
-    const sender = senderJid.split('@')[0]
-    const caption = `📲 Status from @${sender}`
+const senderName =
+  message.pushName ||
+  message.verifiedBizName ||
+  senderJid.split('@')[0]
 
+const caption = `📲 Status from ${senderName}`
+    
     if (type === 'imageMessage') {
       const stream = await downloadContentFromMessage(
         body.imageMessage,
