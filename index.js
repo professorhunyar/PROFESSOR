@@ -1,4 +1,3 @@
-
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -47,7 +46,8 @@ try {
 
 const saveSettings = () =>
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2))
-// FORCE ALL FEATURES ON AT STARTUP
+
+// FORCE FEATURES ON AT STARTUP
 Object.assign(settings, {
   autoStatusView: true,
   saveViewedStatusToSelf: true,
@@ -61,6 +61,7 @@ Object.assign(settings, {
 })
 
 saveSettings()
+
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' })
 
 let onlineHeartbeat = null
@@ -102,7 +103,6 @@ function cacheMessage(message) {
   if (!message?.key?.id || !message.message) return
 
   const key = `${message.key.remoteJid}:${message.key.id}`
-
   messageCache.set(key, message)
 
   console.log('📥 MESSAGE CACHED:', key)
@@ -114,12 +114,11 @@ function cacheMessage(message) {
 
 function getCachedMessage(key) {
   const exactKey = `${key.remoteJid}:${key.id}`
-
-  // First try exact JID + message ID
   const exact = messageCache.get(exactKey)
+
   if (exact?.message) return exact
 
-  // LID mismatch fallback: search by message ID
+  // LID mismatch fallback
   for (const cached of messageCache.values()) {
     if (cached?.key?.id === key.id && cached?.message) {
       console.log('✅ CACHE FOUND BY MESSAGE ID (LID fallback)')
@@ -170,8 +169,12 @@ async function sendAntiDelete(sock, protocolMessage) {
 
   const body = unwrapMessage(cached.message)
   const type = getContentType(body)
-  const sender = key.participant || cached.key?.participant ||
-    cached.key?.remoteJid || key.remoteJid
+
+  const sender =
+    key.participant ||
+    cached.key?.participant ||
+    cached.key?.remoteJid ||
+    key.remoteJid
 
   const label = `🗑️ Deleted message\nFrom: @${sender.split('@')[0]}`
 
@@ -241,9 +244,9 @@ function findViewOnceMedia(content) {
   function search(node, insideViewOnce = false, depth = 0) {
     if (!node || typeof node !== 'object' || depth > 15) return null
     if (visited.has(node)) return null
+
     visited.add(node)
 
-    // View Once wrappers
     const wrappers = [
       'viewOnceMessage',
       'viewOnceMessageV2',
@@ -257,17 +260,16 @@ function findViewOnceMedia(content) {
       }
     }
 
-    // Ephemeral wrapper
     if (node.ephemeralMessage?.message) {
       const result = search(
         node.ephemeralMessage.message,
         insideViewOnce,
         depth + 1
       )
+
       if (result) return result
     }
 
-    // Find media
     for (const type of [
       'imageMessage',
       'videoMessage',
@@ -285,7 +287,6 @@ function findViewOnceMedia(content) {
       }
     }
 
-    // Search nested content
     for (const [key, value] of Object.entries(node)) {
       if (key === 'message' && value && typeof value === 'object') {
         const result = search(value, insideViewOnce, depth + 1)
@@ -299,6 +300,64 @@ function findViewOnceMedia(content) {
   return search(content)
 }
 
+// AUTO SAVE INCOMING VIEW ONCE
+async function saveIncomingViewOnceToSelf(sock, message) {
+  if (!settings.autoViewOnce || message.key?.fromMe) return false
+
+  const found = findViewOnceMedia(message.message || {})
+  if (!found) return false
+
+  const { type, media } = found
+
+  try {
+    console.log('🔐 VIEW ONCE DETECTED; downloading:', type)
+
+    const mediaType = type.replace('Message', '').toLowerCase()
+    const stream = await downloadContentFromMessage(media, mediaType)
+
+    const chunks = []
+    for await (const chunk of stream) chunks.push(chunk)
+
+    const buffer = Buffer.concat(chunks)
+
+    if (!buffer.length) {
+      throw new Error('Downloaded media is empty')
+    }
+
+    const senderJid =
+      message.key?.participant ||
+      message.key?.remoteJid ||
+      ''
+
+    const senderName =
+      message.pushName ||
+      senderJid.split('@')[0] ||
+      'Unknown contact'
+
+    const caption = `🔐 View Once received from ${senderName}`
+
+    if (type === 'imageMessage') {
+      await sendToSelf(sock, { image: buffer, caption })
+    } else if (type === 'videoMessage') {
+      await sendToSelf(sock, { video: buffer, caption })
+    } else if (type === 'audioMessage') {
+      await sendToSelf(sock, {
+        audio: buffer,
+        mimetype: media.mimetype || 'audio/ogg; codecs=opus',
+        ptt: !!media.ptt
+      })
+    } else {
+      return false
+    }
+
+    console.log('✅ VIEW ONCE SAVED TO MESSAGE YOURSELF')
+    return true
+  } catch (error) {
+    console.error('❌ VIEW ONCE AUTO-SAVE FAILED:', error.message)
+    return false
+  }
+}
+
 // SAVE STATUS TO SELF
 async function saveStatusToSelf(sock, message) {
   try {
@@ -306,13 +365,14 @@ async function saveStatusToSelf(sock, message) {
     const type = getContentType(body)
 
     const senderJid = message.key?.participant || ''
-const senderName =
-  message.pushName ||
-  message.verifiedBizName ||
-  senderJid.split('@')[0]
 
-const caption = `📲 Status from ${senderName}`
-    
+    const senderName =
+      message.pushName ||
+      message.verifiedBizName ||
+      senderJid.split('@')[0]
+
+    const caption = `📲 Status from ${senderName}`
+
     if (type === 'imageMessage') {
       const stream = await downloadContentFromMessage(
         body.imageMessage,
@@ -373,7 +433,7 @@ async function likeStatus(sock, message) {
       'status@broadcast',
       {
         react: {
-          text: '🪐',
+          text: '🤍',
           key: message.key
         }
       },
@@ -382,7 +442,7 @@ async function likeStatus(sock, message) {
       }
     )
 
-    console.log('🪐 STATUS REACTION SENT:', participant)
+    console.log('🤍 STATUS REACTION SUBMITTED:', participant)
     console.log('Reaction result:', result?.key?.id || 'Submitted')
   } catch (error) {
     console.error('❌ STATUS LIKE FAILED:', error)
@@ -496,7 +556,7 @@ async function connect() {
 
             try {
               await sock.readMessages([message.key])
-              console.log('👁️ STATUS VIEWED')
+              console.log('👁️ STATUS READ RECEIPT SUBMITTED:', message.key?.id)
             } catch (error) {
               console.error('STATUS VIEW FAILED:', error.message)
             }
@@ -525,14 +585,10 @@ async function connect() {
       // CACHE ORIGINAL MESSAGE
       cacheMessage(message)
 
-     // AUTO SAVE ALL INCOMING VIEW ONCE MEDIA
-if (!message.key?.fromMe) {
-  const saved = await saveIncomingViewOnceToSelf(sock, message)
-
-  if (saved) {
-    console.log('✅ AUTO VIEW ONCE SAVED TO MESSAGE YOURSELF')
-  }
-}
+      // AUTO SAVE INCOMING VIEW ONCE MEDIA
+      if (settings.autoViewOnce && !message.key?.fromMe) {
+        await saveIncomingViewOnceToSelf(sock, message)
+      }
 
       // AUTO PRESENCE
       if (
