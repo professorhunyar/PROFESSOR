@@ -305,25 +305,51 @@ async function connect() {
         else return sock.sendMessage(chat, { text: `Status Auto View: ${settings.autoStatusView ? 'ON' : 'OFF'}\nUse ${PREFIX}status on/off` }, { quoted: message })
         saveSettings()
         await sock.sendMessage(chat, { text: `✅ Status Auto View ${settings.autoStatusView ? 'enabled' : 'disabled'}.` }, { quoted: message })
-      } else if (cmd === 'delete') {
-  if (value === 'p') {
-    settings.antiDelete = true
-    settings.antiDeleteMode = 'p'
-  } else if (value === 'g') {
-    settings.antiDelete = true
-    settings.antiDeleteMode = 'g'
-  } else if (value === 'off') {
-    settings.antiDelete = false
-  } else {
-    await sock.sendMessage(chat, {
-      text: 'Use:\n.delete p\n.delete g\n.delete off'
-    }, { quoted: message })
-    continue
-  }
+           } else if (cmd === 'dlt' || cmd === 'delete') {
+        if (value === 'p' || value === 'g') {
+          settings.antiDelete = true
+          settings.antiDeleteMode = value
+        } else if (value === 'off') {
+          settings.antiDelete = false
+        } else {
+          await sock.sendMessage(chat, {
+            text: `Use:\n${PREFIX}dlt p\n${PREFIX}dlt g\n${PREFIX}dlt off`
+          }, { quoted: message })
+          continue
+        }
 
-  saveSettings()
+        saveSettings()
+        await sock.sendMessage(chat, {
+          text: `✅ Anti Delete ${settings.antiDelete ? 'ON (' + settings.antiDeleteMode + ')' : 'OFF'}`
+        }, { quoted: message })
+      } else if (cmd === 'online') {
+        settings.alwaysOnline = value !== 'off'
+        saveSettings()
+        await sock.sendPresenceUpdate(settings.alwaysOnline ? 'available' : 'unavailable').catch(() => {})
+        await sock.sendMessage(chat, { text: `Always Online ${settings.alwaysOnline ? 'ON' : 'OFF'}` }, { quoted: message })
+      } else if (cmd === 'typing') {
+        settings.autoTyping = value !== 'off'
+        saveSettings()
+        await sock.sendMessage(chat, { text: `Auto Typing ${settings.autoTyping ? 'ON' : 'OFF'}` }, { quoted: message })
+      } else if (cmd === 'recording') {
+        settings.autoRecording = value !== 'off'
+        saveSettings()
+        await sock.sendMessage(chat, { text: `Auto Recording ${settings.autoRecording ? 'ON' : 'OFF'}` }, { quoted: message })
+      }
+    }
+  })
 
-  await sock.sendMessage(chat, {
-    text: `✅ Anti Delete ${value.toUpperCase()} activated`
-  }, { quoted: message })
+  sock.ev.on('messages.update', async (updates) => {
+    if (!settings.antiDelete) return
+    for (const item of updates) {
+      const updateMessage = unwrapMessage(item.update?.message || {})
+      const protocol = updateMessage.protocolMessage
+      if (protocol?.type === 0) await sendAntiDelete(sock, protocol)
+    }
+  })
 }
+
+connect().catch(error => {
+  console.error('Fatal startup error:', error)
+  process.exitCode = 1
+})
