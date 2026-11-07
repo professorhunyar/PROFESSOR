@@ -568,7 +568,7 @@ async function connect() {
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       console.log('\nScan QR with WhatsApp > Linked devices:\n')
-      qrcode.generate(qr, { small: true })
+     qrcode.generate(qr, { small: false })
     }
 
     if (connection === 'open') {
