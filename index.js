@@ -305,7 +305,7 @@ async function connect() {
         else return sock.sendMessage(chat, { text: `Status Auto View: ${settings.autoStatusView ? 'ON' : 'OFF'}\nUse ${PREFIX}status on/off` }, { quoted: message })
         saveSettings()
         await sock.sendMessage(chat, { text: `✅ Status Auto View ${settings.autoStatusView ? 'enabled' : 'disabled'}.` }, { quoted: message })
-      } } else if (cmd === 'delete') {
+      } else if (cmd === 'delete') {
   if (value === 'p') {
     settings.antiDelete = true
     settings.antiDeleteMode = 'p'
