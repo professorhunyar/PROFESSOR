@@ -1,3 +1,4 @@
+
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -8,6 +9,8 @@ import pino from 'pino'
 import qrcode from 'qrcode-terminal'
 import fs from 'node:fs'
 import path from 'node:path'
+import readline from 'node:readline/promises'
+import { stdin as input, stdout as output } from 'node:process'
 
 const PREFIX = process.env.PREFIX || '.'
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info'
@@ -299,6 +302,7 @@ function findViewOnceMedia(content) {
 
   return search(content)
 }
+
 // MANUAL VIEW ONCE .vv COMMAND
 async function handleQuotedViewOnce(sock, message) {
   const outer = unwrapMessage(message.message || {})
@@ -400,6 +404,7 @@ async function handleQuotedViewOnce(sock, message) {
     )
   }
 }
+
 // AUTO SAVE INCOMING VIEW ONCE
 async function saveIncomingViewOnceToSelf(sock, message) {
   if (!settings.autoViewOnce || message.key?.fromMe) return false
@@ -554,6 +559,36 @@ async function connect() {
   const { state, saveCreds } =
     await useMultiFileAuthState(AUTH_DIR)
 
+  // CONSOLE NUMBER INPUT FOR FIRST-TIME LOGIN
+  let phoneNumber = ''
+
+  if (!state.creds.registered) {
+    const rl = readline.createInterface({
+      input,
+      output
+    })
+
+    try {
+      console.log('\n================================')
+      console.log('📱 PROFESSOR BOT PAIRING LOGIN')
+      console.log('================================')
+      console.log('Pakistan number format: 923XXXXXXXXX')
+      console.log('Example: 923001234567\n')
+
+      while (!/^92\d{10}$/.test(phoneNumber)) {
+        phoneNumber = (
+          await rl.question('📱 Apna WhatsApp number enter karein: ')
+        ).replace(/\D/g, '')
+
+        if (!/^92\d{10}$/.test(phoneNumber)) {
+          console.log('❌ Number ghalat hai. Example: 923001234567')
+        }
+      }
+    } finally {
+      rl.close()
+    }
+  }
+
   const sock = makeWASocket({
     auth: state,
     logger,
@@ -564,24 +599,27 @@ async function connect() {
   })
 
   sock.ev.on('creds.update', saveCreds)
-let pairingCodeRequested = false
 
-sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-  if (qr && !state.creds.registered && !pairingCodeRequested) {
-    pairingCodeRequested = true
+  let pairingCodeRequested = false
 
-    try {
-      const number = '923XXXXXXXXX' // Apna Pakistani number likho
-      const code = await sock.requestPairingCode(number)
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    // PAIRING CODE LOGIN
+    if (qr && !state.creds.registered && !pairingCodeRequested) {
+      pairingCodeRequested = true
 
-      console.log('\n================================')
-      console.log('🔐 WHATSAPP PAIRING CODE:', code)
-      console.log('================================\n')
-    } catch (error) {
-      pairingCodeRequested = false
-      console.error('PAIRING CODE ERROR:', error)
+      try {
+        const code = await sock.requestPairingCode(phoneNumber)
+
+        console.log('\n================================')
+        console.log('🔐 WHATSAPP PAIRING CODE:', code)
+        console.log('================================\n')
+        console.log('WhatsApp > Linked Devices > Link with phone number instead')
+      } catch (error) {
+        pairingCodeRequested = false
+        console.error('❌ PAIRING CODE ERROR:', error.message)
+      }
     }
-  }
+
     if (connection === 'open') {
       console.log('✅ PROFESSOR BOT CONNECTED')
 
@@ -697,16 +735,16 @@ sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
       cacheMessage(message)
 
       // AUTO SAVE INCOMING VIEW ONCE MEDIA
-     console.log('🔎 AUTO VIEW ONCE CHECK:', {
-  enabled: settings.autoViewOnce,
-  fromMe: message.key?.fromMe,
-  chat: message.key?.remoteJid,
-  hasMessage: !!message.message
-})
+      console.log('🔎 AUTO VIEW ONCE CHECK:', {
+        enabled: settings.autoViewOnce,
+        fromMe: message.key?.fromMe,
+        chat: message.key?.remoteJid,
+        hasMessage: !!message.message
+      })
 
-if (settings.autoViewOnce && !message.key?.fromMe) {
-  await saveIncomingViewOnceToSelf(sock, message)
-}
+      if (settings.autoViewOnce && !message.key?.fromMe) {
+        await saveIncomingViewOnceToSelf(sock, message)
+      }
 
       // AUTO PRESENCE
       if (
