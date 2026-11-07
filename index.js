@@ -299,7 +299,107 @@ function findViewOnceMedia(content) {
 
   return search(content)
 }
+// MANUAL VIEW ONCE .vv COMMAND
+async function handleQuotedViewOnce(sock, message) {
+  const outer = unwrapMessage(message.message || {})
 
+  const context =
+    outer.extendedTextMessage?.contextInfo ||
+    outer.imageMessage?.contextInfo ||
+    outer.videoMessage?.contextInfo ||
+    outer.audioMessage?.contextInfo
+
+  const quoted = context?.quotedMessage
+
+  if (!quoted) {
+    await sock.sendMessage(
+      message.key.remoteJid,
+      {
+        text: 'View Once photo/video/audio par reply karke .vv bhejein.'
+      },
+      { quoted: message }
+    )
+    return
+  }
+
+  const found = findViewOnceMedia(quoted)
+
+  if (!found) {
+    await sock.sendMessage(
+      message.key.remoteJid,
+      {
+        text: '❌ Quoted message mein supported View Once media nahi mila.'
+      },
+      { quoted: message }
+    )
+    return
+  }
+
+  const { type, media } = found
+
+  try {
+    console.log('🔐 MANUAL VIEW ONCE DOWNLOAD:', type)
+
+    const mediaType = type.replace('Message', '').toLowerCase()
+
+    const stream = await downloadContentFromMessage(
+      media,
+      mediaType
+    )
+
+    const chunks = []
+    for await (const chunk of stream) {
+      chunks.push(chunk)
+    }
+
+    const buffer = Buffer.concat(chunks)
+
+    if (!buffer.length) {
+      throw new Error('Downloaded media is empty')
+    }
+
+    const caption = '🔓 View Once media — requested with .vv'
+
+    if (type === 'imageMessage') {
+      await sendToSelf(sock, {
+        image: buffer,
+        caption
+      })
+    } else if (type === 'videoMessage') {
+      await sendToSelf(sock, {
+        video: buffer,
+        caption
+      })
+    } else if (type === 'audioMessage') {
+      await sendToSelf(sock, {
+        audio: buffer,
+        mimetype: media.mimetype || 'audio/ogg; codecs=opus',
+        ptt: !!media.ptt
+      })
+    }
+
+    await sock.sendMessage(
+      message.key.remoteJid,
+      {
+        text: '✅ View Once media Message Yourself mein bhej di.'
+      },
+      { quoted: message }
+    )
+
+    console.log('✅ MANUAL VIEW ONCE SAVED')
+
+  } catch (error) {
+    console.error('❌ MANUAL VIEW ONCE FAILED:', error)
+
+    await sock.sendMessage(
+      message.key.remoteJid,
+      {
+        text: '❌ View Once media download nahi ho saka.'
+      },
+      { quoted: message }
+    )
+  }
+}
 // AUTO SAVE INCOMING VIEW ONCE
 async function saveIncomingViewOnceToSelf(sock, message) {
   if (!settings.autoViewOnce || message.key?.fromMe) return false
