@@ -1,0 +1,15 @@
+{
+  "name": "shaheen-mini-whatsapp-bot",
+  "version": "1.6.0",
+  "private": true,
+  "type": "module",
+  "description": "Shaheen WhatsApp bot with status copy, anti-delete, manual quoted View Once command and presence options.",
+  "main": "index.js",
+  "scripts": { "start": "node index.js", "check": "node --check index.js" },
+  "engines": { "node": ">=20.0.0" },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pino": "9.6.0",
+    "qrcode-terminal": "0.12.0"
+  }
+}
