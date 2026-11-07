@@ -381,7 +381,7 @@ async function handleQuotedViewOnce(sock, message) {
     await sock.sendMessage(
       message.key.remoteJid,
       {
-        text: '✅ View Once media Message Yourself mein bhej di.'
+        text: ' '
       },
       { quoted: message }
     )
