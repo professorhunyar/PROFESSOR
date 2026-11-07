@@ -1,3 +1,4 @@
+
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -90,6 +91,7 @@ function cacheMessage(message) {
   const key = `${message.key.remoteJid}:${message.key.id}`
 
   messageCache.set(key, message)
+
   console.log('📥 MESSAGE CACHED:', key)
 
   if (messageCache.size > MAX_CACHE) {
@@ -97,16 +99,36 @@ function cacheMessage(message) {
   }
 }
 
+function getCachedMessage(key) {
+  const exactKey = `${key.remoteJid}:${key.id}`
+
+  // First try exact JID + message ID
+  const exact = messageCache.get(exactKey)
+  if (exact?.message) return exact
+
+  // LID mismatch fallback: search by message ID
+  for (const cached of messageCache.values()) {
+    if (cached?.key?.id === key.id && cached?.message) {
+      console.log('✅ CACHE FOUND BY MESSAGE ID (LID fallback)')
+      return cached
+    }
+  }
+
+  return null
+}
+
 function getSelfJid(sock) {
   const raw = sock.user?.id || ''
   const number = raw.split(':')[0]
+
   return number ? `${number}@s.whatsapp.net` : null
 }
 
 async function sendToSelf(sock, content) {
   const jid = getSelfJid(sock)
+
   if (!jid) {
-    console.log('Self JID not available')
+    console.log('❌ Self JID not available')
     return
   }
 
@@ -124,19 +146,20 @@ async function sendAntiDelete(sock, protocolMessage) {
   if (settings.antiDeleteMode === 'p' && isGroup) return
   if (settings.antiDeleteMode === 'g' && !isGroup) return
 
-  console.log('🗑️ DELETE EVENT RECEIVED:', key.remoteJid, key.id)
+  console.log('🗑️ DELETE EVENT:', key.remoteJid, key.id)
 
-  const cacheKey = `${key.remoteJid}:${key.id}`
-  const cached = messageCache.get(cacheKey)
+  const cached = getCachedMessage(key)
 
   if (!cached?.message) {
-    console.log('❌ Deleted message not found in cache:', cacheKey)
+    console.log('❌ MESSAGE NOT FOUND IN CACHE:', key.id)
     return
   }
 
   const body = unwrapMessage(cached.message)
   const type = getContentType(body)
-  const sender = key.participant || key.remoteJid
+  const sender = key.participant || cached.key?.participant ||
+    cached.key?.remoteJid || key.remoteJid
+
   const label = `🗑️ Deleted message\nFrom: @${sender.split('@')[0]}`
 
   try {
@@ -192,9 +215,9 @@ async function sendAntiDelete(sock, protocolMessage) {
       }
     }
 
-    console.log('✅ Deleted message copied to Message Yourself')
+    console.log('✅ DELETED MESSAGE SENT TO MESSAGE YOURSELF')
   } catch (error) {
-    console.error('❌ Anti-delete restore failed:', error)
+    console.error('❌ ANTI DELETE RESTORE ERROR:', error)
   }
 }
 
@@ -278,10 +301,10 @@ async function saveIncomingViewOnceToSelf(sock, message) {
       })
     }
 
-    console.log('✅ Incoming View Once copied')
+    console.log('✅ INCOMING VIEW ONCE COPIED')
     return true
   } catch (error) {
-    console.error('Auto View Once error:', error.message)
+    console.error('AUTO VIEW ONCE ERROR:', error.message)
     return false
   }
 }
@@ -343,7 +366,7 @@ async function handleQuotedViewOnce(sock, message) {
       })
     }
   } catch (error) {
-    console.error('Manual .vv failed:', error.message)
+    console.error('MANUAL .vv FAILED:', error.message)
   }
 }
 
@@ -397,29 +420,29 @@ async function saveStatusToSelf(sock, message) {
       })
     }
 
-    console.log('✅ Status copied to Message Yourself')
+    console.log('✅ STATUS COPIED TO MESSAGE YOURSELF')
   } catch (error) {
-    console.error('Status save failed:', error.message)
+    console.error('STATUS SAVE FAILED:', error.message)
   }
 }
 
 // STATUS LIKE
 async function likeStatus(sock, message) {
   try {
-    await sock.sendMessage(message.key.remoteJid, {
+    await sock.sendMessage('status@broadcast', {
       react: {
         text: '❤️',
         key: message.key
       }
     })
 
-    console.log('❤️ STATUS LIKE SENT')
+    console.log('❤️ STATUS LIKE REQUEST SENT')
   } catch (error) {
     console.error('❌ STATUS LIKE FAILED:', error)
   }
 }
 
-// CONNECT
+// CONNECT BOT
 async function connect() {
   const { state, saveCreds } =
     await useMultiFileAuthState(AUTH_DIR)
@@ -480,12 +503,12 @@ async function connect() {
         console.log('Connection closed. Reconnecting...')
         setTimeout(connect, 3000)
       } else {
-        console.log('Logged out. Auth folder ko delete na karein jab tak zaroori na ho.')
+        console.log('Logged out. Auth folder ko delete na karein.')
       }
     }
   })
 
-  // ALL MESSAGE EVENTS
+  // INCOMING MESSAGE EVENTS
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     console.log('📩 MESSAGES UPSERT:', type, messages.length)
 
@@ -494,10 +517,10 @@ async function connect() {
 
       const chat = message.key?.remoteJid
 
-      // STATUS
+      // STATUS AUTO VIEW + LIKE
       if (chat === 'status@broadcast') {
         console.log(
-          '📲 STATUS EVENT:',
+          '📲 STATUS EVENT RECEIVED:',
           message.key?.id,
           message.key?.participant
         )
@@ -528,7 +551,7 @@ async function connect() {
               await sock.readMessages([message.key])
               console.log('👁️ STATUS VIEWED')
             } catch (error) {
-              console.error('Status view failed:', error.message)
+              console.error('STATUS VIEW FAILED:', error.message)
             }
           }
 
@@ -542,7 +565,7 @@ async function connect() {
 
       if (!message.message) continue
 
-      // DELETE EVENT
+      // REVOKE / DELETE EVENT
       const unwrapped = unwrapMessage(message.message)
       const protocol = unwrapped?.protocolMessage
 
@@ -556,14 +579,11 @@ async function connect() {
       cacheMessage(message)
 
       // AUTO VIEW ONCE
-      if (
-        !message.key?.fromMe &&
-        settings.autoViewOnce
-      ) {
+      if (!message.key?.fromMe && settings.autoViewOnce) {
         await saveIncomingViewOnceToSelf(sock, message)
       }
 
-      // PRESENCE
+      // AUTO PRESENCE
       if (
         type === 'notify' &&
         !message.key.fromMe &&
@@ -583,7 +603,7 @@ async function connect() {
         }
       }
 
-      // COMMANDS
+      // COMMANDS FROM OWN MESSAGES
       if (type !== 'notify' || !message.key.fromMe) continue
 
       const text = getText(message)
