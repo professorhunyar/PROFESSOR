@@ -236,151 +236,67 @@ async function sendAntiDelete(sock, protocolMessage) {
 
 // VIEW ONCE FINDER
 function findViewOnceMedia(content) {
-  let current = content
+  const visited = new Set()
 
-  while (current) {
-    if (current.ephemeralMessage?.message) {
-      current = current.ephemeralMessage.message
-      continue
-    }
+  function search(node, insideViewOnce = false, depth = 0) {
+    if (!node || typeof node !== 'object' || depth > 15) return null
+    if (visited.has(node)) return null
+    visited.add(node)
 
-    const wrapper = [
+    // View Once wrappers
+    const wrappers = [
       'viewOnceMessage',
       'viewOnceMessageV2',
       'viewOnceMessageV2Extension'
-    ].find(name => current[name]?.message)
+    ]
 
-    if (wrapper) {
-      current = current[wrapper].message
-      continue
+    for (const wrapper of wrappers) {
+      if (node[wrapper]?.message) {
+        const result = search(node[wrapper].message, true, depth + 1)
+        if (result) return result
+      }
     }
 
-    const type = current.imageMessage
-      ? 'imageMessage'
-      : current.videoMessage
-        ? 'videoMessage'
-        : current.audioMessage
-          ? 'audioMessage'
-          : null
-
-    if (type && (
-      current[type]?.viewOnce ||
-      content?.viewOnceMessage ||
-      content?.viewOnceMessageV2 ||
-      content?.viewOnceMessageV2Extension
-    )) {
-      return { type, media: current[type] }
+    // Ephemeral wrapper
+    if (node.ephemeralMessage?.message) {
+      const result = search(
+        node.ephemeralMessage.message,
+        insideViewOnce,
+        depth + 1
+      )
+      if (result) return result
     }
 
-    break
-  }
+    // Find media
+    for (const type of [
+      'imageMessage',
+      'videoMessage',
+      'audioMessage'
+    ]) {
+      const media = node[type]
 
-  return null
-}
-
-async function saveIncomingViewOnceToSelf(sock, message) {
-  const found = findViewOnceMedia(message.message || {})
-  if (!found) return false
-
-  const { type, media } = found
-
-  try {
-    const stream = await downloadContentFromMessage(
-      media,
-      type.replace('Message', '').toLowerCase()
-    )
-
-    const chunks = []
-    for await (const chunk of stream) chunks.push(chunk)
-
-    const buffer = Buffer.concat(chunks)
-    const senderJid =
-      message.key?.participant ||
-      message.key?.remoteJid ||
-      ''
-
-    const sender = senderJid.split('@')[0]
-    const caption = `🔐 View Once media received from ${sender}`
-
-    if (type === 'imageMessage') {
-      await sendToSelf(sock, { image: buffer, caption })
-    } else if (type === 'videoMessage') {
-      await sendToSelf(sock, { video: buffer, caption })
-    } else if (type === 'audioMessage') {
-      await sendToSelf(sock, {
-        audio: buffer,
-        mimetype: media.mimetype || 'audio/ogg; codecs=opus',
-        ptt: !!media.ptt
-      })
+      if (
+        media &&
+        typeof media === 'object' &&
+        (insideViewOnce || media.viewOnce === true)
+      ) {
+        console.log('🔐 VIEW ONCE MEDIA DETECTED:', type)
+        return { type, media }
+      }
     }
 
-    console.log('✅ INCOMING VIEW ONCE COPIED')
-    return true
-  } catch (error) {
-    console.error('AUTO VIEW ONCE ERROR:', error.message)
-    return false
-  }
-}
-
-async function handleQuotedViewOnce(sock, message) {
-  const outer = unwrapMessage(message.message || {})
-
-  const context =
-    outer.extendedTextMessage?.contextInfo ||
-    outer.imageMessage?.contextInfo ||
-    outer.videoMessage?.contextInfo
-
-  const quoted = context?.quotedMessage
-
-  if (!quoted) {
-    await sock.sendMessage(message.key.remoteJid, {
-      text: 'View Once media par reply karke .vv bhejein.'
-    }, { quoted: message })
-    return
-  }
-
-  const found = findViewOnceMedia(quoted)
-
-  if (!found) {
-    await sock.sendMessage(message.key.remoteJid, {
-      text: 'Quoted message mein supported View Once media nahi mila.'
-    }, { quoted: message })
-    return
-  }
-
-  const { type, media } = found
-
-  try {
-    const stream = await downloadContentFromMessage(
-      media,
-      type.replace('Message', '').toLowerCase()
-    )
-
-    const chunks = []
-    for await (const chunk of stream) chunks.push(chunk)
-
-    const buffer = Buffer.concat(chunks)
-
-    if (type === 'imageMessage') {
-      await sendToSelf(sock, {
-        image: buffer,
-        caption: '🔓 View Once media — .vv'
-      })
-    } else if (type === 'videoMessage') {
-      await sendToSelf(sock, {
-        video: buffer,
-        caption: '🔓 View Once media — .vv'
-      })
-    } else if (type === 'audioMessage') {
-      await sendToSelf(sock, {
-        audio: buffer,
-        mimetype: media.mimetype || 'audio/ogg; codecs=opus',
-        ptt: !!media.ptt
-      })
+    // Search nested content
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'message' && value && typeof value === 'object') {
+        const result = search(value, insideViewOnce, depth + 1)
+        if (result) return result
+      }
     }
-  } catch (error) {
-    console.error('MANUAL .vv FAILED:', error.message)
+
+    return null
   }
+
+  return search(content)
 }
 
 // SAVE STATUS TO SELF
