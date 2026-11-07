@@ -13,14 +13,18 @@ const PREFIX = process.env.PREFIX || '.'
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info'
 const DATA_DIR = './data'
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json')
-const MAX_CACHE = 250
+const MAX_CACHE = 1000
+
 const messageCache = new Map()
+const savedStatusKeys = new Set()
+const activePresenceChats = new Set()
 
 fs.mkdirSync(DATA_DIR, { recursive: true })
 
 let settings = {
   autoStatusView: true,
   saveViewedStatusToSelf: true,
+  autoStatusLike: true,
   antiDelete: true,
   antiDeleteMode: 'p',
   alwaysOnline: true,
@@ -37,15 +41,13 @@ try {
     }
   }
 } catch (error) {
-  console.error('Could not read settings:', error.message)
+  console.error('Settings error:', error.message)
 }
 
 const saveSettings = () =>
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2))
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' })
-const activePresenceChats = new Set()
-const savedStatusKeys = new Set()
 
 let onlineHeartbeat = null
 let presenceHeartbeat = null
@@ -88,10 +90,27 @@ function cacheMessage(message) {
   const key = `${message.key.remoteJid}:${message.key.id}`
 
   messageCache.set(key, message)
+  console.log('📥 MESSAGE CACHED:', key)
 
   if (messageCache.size > MAX_CACHE) {
     messageCache.delete(messageCache.keys().next().value)
   }
+}
+
+function getSelfJid(sock) {
+  const raw = sock.user?.id || ''
+  const number = raw.split(':')[0]
+  return number ? `${number}@s.whatsapp.net` : null
+}
+
+async function sendToSelf(sock, content) {
+  const jid = getSelfJid(sock)
+  if (!jid) {
+    console.log('Self JID not available')
+    return
+  }
+
+  await sock.sendMessage(jid, content)
 }
 
 // ANTI DELETE
@@ -105,10 +124,13 @@ async function sendAntiDelete(sock, protocolMessage) {
   if (settings.antiDeleteMode === 'p' && isGroup) return
   if (settings.antiDeleteMode === 'g' && !isGroup) return
 
-  const cached = messageCache.get(`${key.remoteJid}:${key.id}`)
+  console.log('🗑️ DELETE EVENT RECEIVED:', key.remoteJid, key.id)
+
+  const cacheKey = `${key.remoteJid}:${key.id}`
+  const cached = messageCache.get(cacheKey)
 
   if (!cached?.message) {
-    console.log('Deleted message not found in cache:', key.id)
+    console.log('❌ Deleted message not found in cache:', cacheKey)
     return
   }
 
@@ -137,13 +159,9 @@ async function sendAntiDelete(sock, protocolMessage) {
       )
 
       const chunks = []
-
-      for await (const chunk of stream) {
-        chunks.push(chunk)
-      }
+      for await (const chunk of stream) chunks.push(chunk)
 
       const buffer = Buffer.concat(chunks)
-
       const caption =
         `${label}${media.caption ? `\n\n${media.caption}` : ''}`
 
@@ -166,23 +184,23 @@ async function sendAntiDelete(sock, protocolMessage) {
           ptt: !!media.ptt
         })
       } else if (type === 'stickerMessage') {
-        await sendToSelf(sock, {
-          sticker: buffer
-        })
+        await sendToSelf(sock, { sticker: buffer })
       } else {
         await sendToSelf(sock, {
-          text: `${label}\n(Media type: ${type})`
+          text: `${label}\nMedia type: ${type}`
         })
       }
     }
+
+    console.log('✅ Deleted message copied to Message Yourself')
   } catch (error) {
-    console.error('Anti-delete restore failed:', error.message)
+    console.error('❌ Anti-delete restore failed:', error)
   }
 }
 
-// VIEW ONCE MEDIA FINDER
-function findViewOnceMedia(messageContent) {
-  let current = messageContent
+// VIEW ONCE FINDER
+function findViewOnceMedia(content) {
+  let current = content
 
   while (current) {
     if (current.ephemeralMessage?.message) {
@@ -190,87 +208,42 @@ function findViewOnceMedia(messageContent) {
       continue
     }
 
-    for (const wrapper of [
+    const wrapper = [
       'viewOnceMessage',
       'viewOnceMessageV2',
       'viewOnceMessageV2Extension'
-    ]) {
-      if (current[wrapper]?.message) {
-        current = current[wrapper].message
-        break
-      }
+    ].find(name => current[name]?.message)
+
+    if (wrapper) {
+      current = current[wrapper].message
+      continue
     }
 
-    if (current === messageContent) break
+    const type = current.imageMessage
+      ? 'imageMessage'
+      : current.videoMessage
+        ? 'videoMessage'
+        : current.audioMessage
+          ? 'audioMessage'
+          : null
 
-    if (
-      current &&
-      (current.imageMessage ||
-        current.videoMessage ||
-        current.audioMessage)
-    ) {
-      const type = current.imageMessage
-        ? 'imageMessage'
-        : current.videoMessage
-          ? 'videoMessage'
-          : 'audioMessage'
-
-      const media = current[type]
-
-      if (
-        media?.viewOnce ||
-        messageContent?.viewOnceMessage ||
-        messageContent?.viewOnceMessageV2 ||
-        messageContent?.viewOnceMessageV2Extension
-      ) {
-        return { type, media }
-      }
+    if (type && (
+      current[type]?.viewOnce ||
+      content?.viewOnceMessage ||
+      content?.viewOnceMessageV2 ||
+      content?.viewOnceMessageV2Extension
+    )) {
+      return { type, media: current[type] }
     }
 
-    if (
-      !current.ephemeralMessage &&
-      !current.viewOnceMessage &&
-      !current.viewOnceMessageV2 &&
-      !current.viewOnceMessageV2Extension
-    ) {
-      const type = current.imageMessage
-        ? 'imageMessage'
-        : current.videoMessage
-          ? 'videoMessage'
-          : current.audioMessage
-            ? 'audioMessage'
-            : null
-
-      if (type && current[type]?.viewOnce) {
-        return { type, media: current[type] }
-      }
-
-      break
-    }
-  }
-
-  const directType = messageContent?.imageMessage
-    ? 'imageMessage'
-    : messageContent?.videoMessage
-      ? 'videoMessage'
-      : messageContent?.audioMessage
-        ? 'audioMessage'
-        : null
-
-  if (directType && messageContent[directType]?.viewOnce) {
-    return {
-      type: directType,
-      media: messageContent[directType]
-    }
+    break
   }
 
   return null
 }
 
-// AUTO SAVE INCOMING VIEW ONCE
 async function saveIncomingViewOnceToSelf(sock, message) {
   const found = findViewOnceMedia(message.message || {})
-
   if (!found) return false
 
   const { type, media } = found
@@ -282,103 +255,16 @@ async function saveIncomingViewOnceToSelf(sock, message) {
     )
 
     const chunks = []
-
-    for await (const chunk of stream) {
-      chunks.push(chunk)
-    }
+    for await (const chunk of stream) chunks.push(chunk)
 
     const buffer = Buffer.concat(chunks)
-
     const senderJid =
       message.key?.participant ||
       message.key?.remoteJid ||
       ''
 
     const sender = senderJid.split('@')[0]
-
-    const caption =
-      `🔐 View Once media received from ${sender ? `@${sender}` : 'contact'} — saved to Message Yourself`
-
-    if (type === 'imageMessage') {
-      await sendToSelf(sock, {
-        image: buffer,
-        caption,
-        mentions: senderJid ? [senderJid] : []
-      })
-    } else if (type === 'videoMessage') {
-      await sendToSelf(sock, {
-        video: buffer,
-        caption,
-        mentions: senderJid ? [senderJid] : []
-      })
-    } else if (type === 'audioMessage') {
-      await sendToSelf(sock, {
-        audio: buffer,
-        mimetype: media.mimetype || 'audio/ogg; codecs=opus',
-        ptt: !!media.ptt
-      })
-    }
-
-    console.log('✅ Incoming View Once media copied to Message Yourself')
-
-    return true
-  } catch (error) {
-    console.error('Auto View Once save failed:', error.message)
-    return false
-  }
-}
-
-// MANUAL VIEW ONCE COMMAND
-async function handleQuotedViewOnce(sock, message) {
-  const outer = unwrapMessage(message.message || {})
-
-  const context =
-    outer.extendedTextMessage?.contextInfo ||
-    outer.imageMessage?.contextInfo ||
-    outer.videoMessage?.contextInfo
-
-  const quoted = context?.quotedMessage
-
-  if (!quoted) {
-    await sock.sendMessage(
-      message.key.remoteJid,
-      {
-        text: 'View Once media par reply karke .vv bhejein.'
-      },
-      { quoted: message }
-    )
-    return
-  }
-
-  const found = findViewOnceMedia(quoted)
-
-  if (!found) {
-    await sock.sendMessage(
-      message.key.remoteJid,
-      {
-        text: 'Quoted message mein supported View Once media nahi mila.'
-      },
-      { quoted: message }
-    )
-    return
-  }
-
-  const { type, media } = found
-
-  try {
-    const stream = await downloadContentFromMessage(
-      media,
-      type.replace('Message', '').toLowerCase()
-    )
-
-    const chunks = []
-
-    for await (const chunk of stream) {
-      chunks.push(chunk)
-    }
-
-    const buffer = Buffer.concat(chunks)
-    const caption = '🔓 View Once media — requested with .vv'
+    const caption = `🔐 View Once media received from ${sender}`
 
     if (type === 'imageMessage') {
       await sendToSelf(sock, { image: buffer, caption })
@@ -392,51 +278,82 @@ async function handleQuotedViewOnce(sock, message) {
       })
     }
 
-    await sock.sendMessage(
-      message.key.remoteJid,
-      { text: ' ' },
-      { quoted: message }
-    )
+    console.log('✅ Incoming View Once copied')
+    return true
   } catch (error) {
-    console.error('Manual .vv failed:', error.message)
-
-    await sock.sendMessage(
-      message.key.remoteJid,
-      {
-        text: '❌ Media access nahi ho saka. WhatsApp/Baileys ne content expose nahi kiya.'
-      },
-      { quoted: message }
-    )
+    console.error('Auto View Once error:', error.message)
+    return false
   }
 }
 
-// MESSAGE YOURSELF JID
-function getSelfJid(sock) {
-  const raw = sock.user?.id || ''
-  const number = raw.split(':')[0]
+async function handleQuotedViewOnce(sock, message) {
+  const outer = unwrapMessage(message.message || {})
 
-  return number ? `${number}@s.whatsapp.net` : null
+  const context =
+    outer.extendedTextMessage?.contextInfo ||
+    outer.imageMessage?.contextInfo ||
+    outer.videoMessage?.contextInfo
+
+  const quoted = context?.quotedMessage
+
+  if (!quoted) {
+    await sock.sendMessage(message.key.remoteJid, {
+      text: 'View Once media par reply karke .vv bhejein.'
+    }, { quoted: message })
+    return
+  }
+
+  const found = findViewOnceMedia(quoted)
+
+  if (!found) {
+    await sock.sendMessage(message.key.remoteJid, {
+      text: 'Quoted message mein supported View Once media nahi mila.'
+    }, { quoted: message })
+    return
+  }
+
+  const { type, media } = found
+
+  try {
+    const stream = await downloadContentFromMessage(
+      media,
+      type.replace('Message', '').toLowerCase()
+    )
+
+    const chunks = []
+    for await (const chunk of stream) chunks.push(chunk)
+
+    const buffer = Buffer.concat(chunks)
+
+    if (type === 'imageMessage') {
+      await sendToSelf(sock, {
+        image: buffer,
+        caption: '🔓 View Once media — .vv'
+      })
+    } else if (type === 'videoMessage') {
+      await sendToSelf(sock, {
+        video: buffer,
+        caption: '🔓 View Once media — .vv'
+      })
+    } else if (type === 'audioMessage') {
+      await sendToSelf(sock, {
+        audio: buffer,
+        mimetype: media.mimetype || 'audio/ogg; codecs=opus',
+        ptt: !!media.ptt
+      })
+    }
+  } catch (error) {
+    console.error('Manual .vv failed:', error.message)
+  }
 }
 
-async function sendToSelf(sock, content) {
-  const jid = getSelfJid(sock)
-
-  if (!jid) return
-
-  await sock.sendMessage(jid, content)
-}
-
-// SAVE STATUS TO MESSAGE YOURSELF
+// SAVE STATUS TO SELF
 async function saveStatusToSelf(sock, message) {
   try {
     const body = unwrapMessage(message.message || {})
     const type = getContentType(body)
 
-    const senderJid =
-      message.key?.participant ||
-      message.key?.remoteJid ||
-      ''
-
+    const senderJid = message.key?.participant || ''
     const sender = senderJid.split('@')[0]
     const caption = `📲 Status from @${sender}`
 
@@ -447,15 +364,11 @@ async function saveStatusToSelf(sock, message) {
       )
 
       const chunks = []
-
-      for await (const chunk of stream) {
-        chunks.push(chunk)
-      }
+      for await (const chunk of stream) chunks.push(chunk)
 
       await sendToSelf(sock, {
         image: Buffer.concat(chunks),
-        caption,
-        mentions: [senderJid]
+        caption
       })
     } else if (type === 'videoMessage') {
       const stream = await downloadContentFromMessage(
@@ -464,15 +377,11 @@ async function saveStatusToSelf(sock, message) {
       )
 
       const chunks = []
-
-      for await (const chunk of stream) {
-        chunks.push(chunk)
-      }
+      for await (const chunk of stream) chunks.push(chunk)
 
       await sendToSelf(sock, {
         video: Buffer.concat(chunks),
-        caption,
-        mentions: [senderJid]
+        caption
       })
     } else if (
       type === 'extendedTextMessage' ||
@@ -484,19 +393,33 @@ async function saveStatusToSelf(sock, message) {
         ''
 
       await sendToSelf(sock, {
-        text: `${caption}\n${text}`,
-        mentions: senderJid ? [senderJid] : []
+        text: `${caption}\n${text}`
       })
     }
+
+    console.log('✅ Status copied to Message Yourself')
   } catch (error) {
-    console.error(
-      'Could not save viewed status to self chat:',
-      error.message
-    )
+    console.error('Status save failed:', error.message)
   }
 }
 
-// CONNECT BOT
+// STATUS LIKE
+async function likeStatus(sock, message) {
+  try {
+    await sock.sendMessage(message.key.remoteJid, {
+      react: {
+        text: '❤️',
+        key: message.key
+      }
+    })
+
+    console.log('❤️ STATUS LIKE SENT')
+  } catch (error) {
+    console.error('❌ STATUS LIKE FAILED:', error)
+  }
+}
+
+// CONNECT
 async function connect() {
   const { state, saveCreds } =
     await useMultiFileAuthState(AUTH_DIR)
@@ -512,71 +435,75 @@ async function connect() {
 
   sock.ev.on('creds.update', saveCreds)
 
-  sock.ev.on(
-    'connection.update',
-    ({ connection, lastDisconnect, qr }) => {
-      if (qr) {
-        console.log(
-          '\nScan this QR with WhatsApp > Linked devices:\n'
-        )
+  sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+    if (qr) {
+      console.log('\nScan QR with WhatsApp > Linked devices:\n')
+      qrcode.generate(qr, { small: true })
+    }
 
-        qrcode.generate(qr, { small: true })
-      }
+    if (connection === 'open') {
+      console.log('✅ PROFESSOR BOT CONNECTED')
 
-      if (connection === 'open') {
-        console.log('PROFESSOR BOT CONNECTED')
+      if (onlineHeartbeat) clearInterval(onlineHeartbeat)
 
-        if (onlineHeartbeat) clearInterval(onlineHeartbeat)
-
-        onlineHeartbeat = setInterval(() => {
-          if (settings.alwaysOnline) {
-            sock.sendPresenceUpdate('available').catch(() => {})
-          }
-        }, 25000)
-
+      onlineHeartbeat = setInterval(() => {
         if (settings.alwaysOnline) {
           sock.sendPresenceUpdate('available').catch(() => {})
         }
+      }, 25000)
 
-        if (presenceHeartbeat) clearInterval(presenceHeartbeat)
-
-        presenceHeartbeat = setInterval(() => {
-          const presence = settings.autoTyping
-            ? 'composing'
-            : settings.autoRecording
-              ? 'recording'
-              : null
-
-          if (!presence) return
-
-          for (const jid of activePresenceChats) {
-            sock.sendPresenceUpdate(presence, jid).catch(() => {})
-          }
-        }, 20000)
+      if (settings.alwaysOnline) {
+        sock.sendPresenceUpdate('available').catch(() => {})
       }
 
-      if (connection === 'close') {
-        const code = lastDisconnect?.error?.output?.statusCode
+      if (presenceHeartbeat) clearInterval(presenceHeartbeat)
 
-        if (code !== DisconnectReason.loggedOut) {
-          console.log('Connection closed. Reconnecting...')
-          setTimeout(connect, 3000)
-        } else {
-          console.log('Logged out. Remove auth folder and pair again.')
+      presenceHeartbeat = setInterval(() => {
+        const presence = settings.autoTyping
+          ? 'composing'
+          : settings.autoRecording
+            ? 'recording'
+            : null
+
+        if (!presence) return
+
+        for (const jid of activePresenceChats) {
+          sock.sendPresenceUpdate(presence, jid).catch(() => {})
         }
+      }, 20000)
+    }
+
+    if (connection === 'close') {
+      const code = lastDisconnect?.error?.output?.statusCode
+
+      if (code !== DisconnectReason.loggedOut) {
+        console.log('Connection closed. Reconnecting...')
+        setTimeout(connect, 3000)
+      } else {
+        console.log('Logged out. Auth folder ko delete na karein jab tak zaroori na ho.')
       }
     }
-  )
+  })
 
-  // INCOMING MESSAGES
+  // ALL MESSAGE EVENTS
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    console.log('📩 MESSAGES UPSERT:', type, messages.length)
+
     for (const message of messages) {
-      if (!message?.message) continue
+      if (!message) continue
 
-      const chat = message.key.remoteJid
+      const chat = message.key?.remoteJid
 
-      // STATUS AUTO VIEW + AUTO LIKE
+      // STATUS
       if (chat === 'status@broadcast') {
+        console.log(
+          '📲 STATUS EVENT:',
+          message.key?.id,
+          message.key?.participant
+        )
+
+        if (!message.message) continue
+
         const statusId =
           `${message.key.participant || ''}:${message.key.id || ''}`
 
@@ -593,30 +520,18 @@ async function connect() {
           }
 
           if (settings.autoStatusView) {
-            // AUTO HEART LIKE
-            try {
-              await sock.sendMessage('status@broadcast', {
-                react: {
-                  text: '❤️',
-                  key: message.key
-                }
-              })
-
-              console.log('❤️ Status like sent')
-            } catch (error) {
-              console.log('Status like failed:', error.message)
+            if (settings.autoStatusLike) {
+              await likeStatus(sock, message)
             }
 
-            // AUTO STATUS SEEN
             try {
               await sock.readMessages([message.key])
-              console.log('✅ Status viewed')
+              console.log('👁️ STATUS VIEWED')
             } catch (error) {
               console.error('Status view failed:', error.message)
             }
           }
 
-          // SAVE STATUS TO MESSAGE YOURSELF
           if (settings.saveViewedStatusToSelf) {
             await saveStatusToSelf(sock, message)
           }
@@ -625,18 +540,30 @@ async function connect() {
         continue
       }
 
-      // ANTI DELETE EVENT
-      const protocol = unwrapMessage(message.message).protocolMessage
+      if (!message.message) continue
 
-      if (settings.antiDelete && protocol?.type === 0) {
+      // DELETE EVENT
+      const unwrapped = unwrapMessage(message.message)
+      const protocol = unwrapped?.protocolMessage
+
+      if (protocol?.type === 0) {
+        console.log('🗑️ REVOKE EVENT FOUND')
         await sendAntiDelete(sock, protocol)
         continue
       }
 
-      // CACHE NORMAL MESSAGES
+      // CACHE ORIGINAL MESSAGE
       cacheMessage(message)
 
-      // AUTO PRESENCE
+      // AUTO VIEW ONCE
+      if (
+        !message.key?.fromMe &&
+        settings.autoViewOnce
+      ) {
+        await saveIncomingViewOnceToSelf(sock, message)
+      }
+
+      // PRESENCE
       if (
         type === 'notify' &&
         !message.key.fromMe &&
@@ -656,11 +583,10 @@ async function connect() {
         }
       }
 
-      // COMMANDS ONLY FROM YOUR OWN MESSAGES
+      // COMMANDS
       if (type !== 'notify' || !message.key.fromMe) continue
 
       const text = getText(message)
-
       if (!text.startsWith(PREFIX)) continue
 
       const [command, ...args] = text
@@ -671,43 +597,31 @@ async function connect() {
       const cmd = (command || '').toLowerCase()
       const value = (args[0] || '').toLowerCase()
 
-      // VIEW ONCE
       if (cmd === 'vv') {
         await handleQuotedViewOnce(sock, message)
 
-      // STATUS ON/OFF
       } else if (cmd === 'status') {
         if (value === 'on') {
           settings.autoStatusView = true
           settings.saveViewedStatusToSelf = true
+          settings.autoStatusLike = true
         } else if (value === 'off') {
           settings.autoStatusView = false
           settings.saveViewedStatusToSelf = false
+          settings.autoStatusLike = false
         } else {
-          await sock.sendMessage(
-            chat,
-            {
-              text:
-                `Status Auto View: ${settings.autoStatusView ? 'ON' : 'OFF'}\n` +
-                `Use ${PREFIX}status on/off`
-            },
-            { quoted: message }
-          )
+          await sock.sendMessage(chat, {
+            text: `Status: ${settings.autoStatusView ? 'ON' : 'OFF'}\nUse .status on/off`
+          }, { quoted: message })
           continue
         }
 
         saveSettings()
 
-        await sock.sendMessage(
-          chat,
-          {
-            text:
-              `✅ Status Auto View ${settings.autoStatusView ? 'enabled' : 'disabled'}.`
-          },
-          { quoted: message }
-        )
+        await sock.sendMessage(chat, {
+          text: `✅ Status Auto View + Like ${settings.autoStatusView ? 'ON' : 'OFF'}`
+        }, { quoted: message })
 
-      // ANTI DELETE PRIVATE / GROUP
       } else if (cmd === 'dlt' || cmd === 'delete') {
         if (value === 'p' || value === 'g') {
           settings.antiDelete = true
@@ -715,31 +629,18 @@ async function connect() {
         } else if (value === 'off') {
           settings.antiDelete = false
         } else {
-          await sock.sendMessage(
-            chat,
-            {
-              text:
-                `Use:\n${PREFIX}dlt p\n` +
-                `${PREFIX}dlt g\n` +
-                `${PREFIX}dlt off`
-            },
-            { quoted: message }
-          )
+          await sock.sendMessage(chat, {
+            text: 'Use:\n.dlt p\n.dlt g\n.dlt off'
+          }, { quoted: message })
           continue
         }
 
         saveSettings()
 
-        await sock.sendMessage(
-          chat,
-          {
-            text:
-              `✅ Anti Delete ${settings.antiDelete ? 'ON (' + settings.antiDeleteMode + ')' : 'OFF'}`
-          },
-          { quoted: message }
-        )
+        await sock.sendMessage(chat, {
+          text: `✅ Anti Delete ${settings.antiDelete ? 'ON (' + settings.antiDeleteMode + ')' : 'OFF'}`
+        }, { quoted: message })
 
-      // ALWAYS ONLINE
       } else if (cmd === 'online') {
         settings.alwaysOnline = value !== 'off'
         saveSettings()
@@ -748,62 +649,45 @@ async function connect() {
           settings.alwaysOnline ? 'available' : 'unavailable'
         ).catch(() => {})
 
-        await sock.sendMessage(
-          chat,
-          {
-            text: `Always Online ${settings.alwaysOnline ? 'ON' : 'OFF'}`
-          },
-          { quoted: message }
-        )
+        await sock.sendMessage(chat, {
+          text: `Always Online ${settings.alwaysOnline ? 'ON' : 'OFF'}`
+        }, { quoted: message })
 
-      // AUTO TYPING
       } else if (cmd === 'typing') {
         settings.autoTyping = value !== 'off'
         saveSettings()
 
-        await sock.sendMessage(
-          chat,
-          {
-            text: `Auto Typing ${settings.autoTyping ? 'ON' : 'OFF'}`
-          },
-          { quoted: message }
-        )
+        await sock.sendMessage(chat, {
+          text: `Auto Typing ${settings.autoTyping ? 'ON' : 'OFF'}`
+        }, { quoted: message })
 
-      // AUTO RECORDING
       } else if (cmd === 'recording') {
         settings.autoRecording = value !== 'off'
         saveSettings()
 
-        await sock.sendMessage(
-          chat,
-          {
-            text: `Auto Recording ${settings.autoRecording ? 'ON' : 'OFF'}`
-          },
-          { quoted: message }
-        )
+        await sock.sendMessage(chat, {
+          text: `Auto Recording ${settings.autoRecording ? 'ON' : 'OFF'}`
+        }, { quoted: message })
       }
     }
   })
 
-  // MESSAGE UPDATE EVENTS
-  sock.ev.on('messages.update', async (updates) => {
+  // ADDITIONAL DELETE UPDATE EVENT
+  sock.ev.on('messages.update', async updates => {
     if (!settings.antiDelete) return
 
     for (const item of updates) {
-      const updateMessage = unwrapMessage(
-        item.update?.message || {}
-      )
-
-      const protocol = updateMessage.protocolMessage
+      const updateMessage = unwrapMessage(item.update?.message || {})
+      const protocol = updateMessage?.protocolMessage
 
       if (protocol?.type === 0) {
+        console.log('🗑️ DELETE EVENT FROM UPDATE')
         await sendAntiDelete(sock, protocol)
       }
     }
   })
 }
 
-// START
 connect().catch(error => {
   console.error('Fatal startup error:', error)
   process.exitCode = 1
