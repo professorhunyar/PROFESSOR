@@ -442,14 +442,28 @@ async function saveStatusToSelf(sock, message) {
 // STATUS LIKE
 async function likeStatus(sock, message) {
   try {
-    await sock.sendMessage('status@broadcast', {
-      react: {
-        text: '❤️',
-        key: message.key
-      }
-    })
+    const participant = message.key?.participant
 
-    console.log('❤️ STATUS LIKE REQUEST SENT')
+    if (!participant) {
+      console.log('⚠️ Status participant missing, like skipped')
+      return
+    }
+
+    const result = await sock.sendMessage(
+      'status@broadcast',
+      {
+        react: {
+          text: '❤️',
+          key: message.key
+        }
+      },
+      {
+        statusJidList: [participant]
+      }
+    )
+
+    console.log('❤️ STATUS REACTION SENT:', participant)
+    console.log('Reaction result:', result?.key?.id || 'Submitted')
   } catch (error) {
     console.error('❌ STATUS LIKE FAILED:', error)
   }
