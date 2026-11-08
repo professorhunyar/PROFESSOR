@@ -66,13 +66,15 @@ function saveStickerCommands() {
 }
 
 function getQuotedSticker(message) {
-  const body = unwrapMessage(message.message || {})
-    const context =
+  const outer = unwrapMessage(message.message || {})
+
+  const context =
     outer.extendedTextMessage?.contextInfo ||
     outer.imageMessage?.contextInfo ||
     outer.videoMessage?.contextInfo ||
     outer.audioMessage?.contextInfo ||
     outer.stickerMessage?.contextInfo
+
   const quoted = unwrapMessage(context?.quotedMessage || {})
   return quoted.stickerMessage || null
 }
@@ -298,15 +300,10 @@ function findViewOnceMedia(content) {
         insideViewOnce,
         depth + 1
       )
-
       if (result) return result
     }
 
-    for (const type of [
-      'imageMessage',
-      'videoMessage',
-      'audioMessage'
-    ]) {
+    for (const type of ['imageMessage', 'videoMessage', 'audioMessage']) {
       const media = node[type]
 
       if (
@@ -331,7 +328,6 @@ function findViewOnceMedia(content) {
 
   return search(content)
 }
-
 // MANUAL VIEW ONCE .vv COMMAND
 async function handleQuotedViewOnce(sock, message) {
   const outer = unwrapMessage(message.message || {})
@@ -340,8 +336,9 @@ async function handleQuotedViewOnce(sock, message) {
     outer.extendedTextMessage?.contextInfo ||
     outer.imageMessage?.contextInfo ||
     outer.videoMessage?.contextInfo ||
-    outer.audioMessage?.contextInfo
-
+    outer.audioMessage?.contextInfo ||
+    outer.stickerMessage?.contextInfo
+  
   const quoted = context?.quotedMessage
 
   if (!quoted) {
@@ -422,16 +419,18 @@ async function handleQuotedViewOnce(sock, message) {
     )
   }
 }
-
 // CREATE A STATIC IMAGE STICKER FROM A REPLIED IMAGE
 async function handleSticker(sock, message) {
   const body = unwrapMessage(message.message || {})
+
   const context =
     body.extendedTextMessage?.contextInfo ||
     body.imageMessage?.contextInfo ||
-    body.videoMessage?.contextInfo
+    body.videoMessage?.contextInfo ||
+    body.stickerMessage?.contextInfo
 
   const quoted = unwrapMessage(context?.quotedMessage || {})
+
   const source = quoted.imageMessage
     ? { type: 'imageMessage', media: quoted.imageMessage }
     : body.imageMessage
@@ -447,6 +446,7 @@ async function handleSticker(sock, message) {
 
   try {
     let sharpModule
+
     try {
       sharpModule = await import('sharp')
     } catch {
@@ -458,11 +458,14 @@ async function handleSticker(sock, message) {
 
     const stream = await downloadContentFromMessage(source.media, 'image')
     const chunks = []
+
     for await (const chunk of stream) chunks.push(chunk)
+
     const buffer = Buffer.concat(chunks)
     if (!buffer.length) throw new Error('Image download empty hai')
 
     const sharp = sharpModule.default || sharpModule
+
     const stickerBuffer = await sharp(buffer)
       .rotate()
       .resize(512, 512, {
@@ -475,13 +478,16 @@ async function handleSticker(sock, message) {
     await sock.sendMessage(message.key.remoteJid, {
       sticker: stickerBuffer
     }, { quoted: message })
+
   } catch (error) {
     console.error('STICKER CREATE FAILED:', error)
+
     await sock.sendMessage(message.key.remoteJid, {
       text: '❌ Sticker nahi ban saka. Image dobara try karein.'
     }, { quoted: message })
   }
 }
+
 
 // AUTO SAVE INCOMING VIEW ONCE
 async function saveIncomingViewOnceToSelf(sock, message) {
