@@ -171,7 +171,7 @@ function getSelfJid(sock) {
   return number ? `${number}@s.whatsapp.net` : null
 }
 
-async function sendToSelf(sock, content) {
+async function sendToSelf(sock, content, quotedMessage = null) {
   const jid = getSelfJid(sock)
 
   if (!jid) {
@@ -179,7 +179,12 @@ async function sendToSelf(sock, content) {
     return
   }
 
-  await sock.sendMessage(jid, content)
+  await sock.sendMessage(
+    jid,
+    content,
+    quotedMessage ? { quoted: quotedMessage } : {}
+  )
+}
 }
 // ANTI DELETE
 async function sendAntiDelete(sock, protocolMessage) {
@@ -554,9 +559,8 @@ async function saveStatusToSelf(sock, message) {
     const type = getContentType(body)
 
     const senderJid = message.key?.participant || ''
-    const senderNumber = senderJid.split('@')[0].split(':')[0]
-    const caption = `📲 Status from +${senderNumber}`
-
+const senderNumber = senderJid.split('@')[0].split(':')[0]
+const caption = `📲 Status from +${senderNumber}`
     if (type === 'imageMessage') {
       const stream = await downloadContentFromMessage(body.imageMessage, 'image')
       const chunks = []
