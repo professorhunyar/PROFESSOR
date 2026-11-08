@@ -557,9 +557,40 @@ async function saveStatusToSelf(sock, message) {
     const body = unwrapMessage(message.message || {})
     const type = getContentType(body)
 
-    const senderJid = message.key?.participant || ''
-const senderNumber = senderJid.split('@')[0].split(':')[0]
-const caption = `📲 Status from +${senderNumber}`
+    const senderJid =
+  message.key?.participantAlt ||
+  message.key?.participant ||
+  ''
+
+let senderNumber = ''
+
+if (senderJid.endsWith('@s.whatsapp.net')) {
+  senderNumber = senderJid.split('@')[0].split(':')[0]
+} else if (senderJid.endsWith('@lid')) {
+  try {
+    const pnJid = await sock.signalRepository?.lidMapping?.getPNForLID(senderJid)
+
+    if (pnJid?.endsWith('@s.whatsapp.net')) {
+      senderNumber = pnJid.split('@')[0].split(':')[0]
+    }
+  } catch (error) {
+    console.log('LID LOOKUP FAILED:', error.message)
+  }
+}
+
+const phoneJid = senderNumber
+  ? `${senderNumber}@s.whatsapp.net`
+  : ''
+
+const senderName =
+  contactNames.get(senderJid) ||
+  (phoneJid ? contactNames.get(phoneJid) : '') ||
+  message.pushName ||
+  'Unknown Contact'
+
+const caption = senderNumber
+  ? `📲 Status from ${senderName} (+${senderNumber})`
+  : `📲 Status from ${senderName} (Number unavailable)`
     if (type === 'imageMessage') {
       const stream = await downloadContentFromMessage(body.imageMessage, 'image')
       const chunks = []
