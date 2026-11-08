@@ -547,63 +547,47 @@ async function saveIncomingViewOnceToSelf(sock, message) {
   }
 }
 // SAVE STATUS TO SELF
+// SAVE STATUS TO SELF
 async function saveStatusToSelf(sock, message) {
   try {
     const body = unwrapMessage(message.message || {})
     const type = getContentType(body)
 
     const senderJid = message.key?.participant || ''
-
-    const senderName =
-      message.pushName ||
-      message.verifiedBizName ||
-      senderJid.split('@')[0]
-
-    const caption = `📲 Status from ${senderName}`
+    const senderNumber = senderJid.split('@')[0].split(':')[0]
+    const caption = `📲 Status from +${senderNumber}`
 
     if (type === 'imageMessage') {
-      const stream = await downloadContentFromMessage(
-        body.imageMessage,
-        'image'
-      )
-
+      const stream = await downloadContentFromMessage(body.imageMessage, 'image')
       const chunks = []
       for await (const chunk of stream) chunks.push(chunk)
 
       await sendToSelf(sock, {
         image: Buffer.concat(chunks),
         caption
-      })
-    } else if (type === 'videoMessage') {
-      const stream = await downloadContentFromMessage(
-        body.videoMessage,
-        'video'
-      )
+      }, message)
 
+    } else if (type === 'videoMessage') {
+      const stream = await downloadContentFromMessage(body.videoMessage, 'video')
       const chunks = []
       for await (const chunk of stream) chunks.push(chunk)
 
       await sendToSelf(sock, {
         video: Buffer.concat(chunks),
         caption
-      })
-    } else if (
-      type === 'extendedTextMessage' ||
-      type === 'conversation'
-    ) {
-      const text =
-        body.conversation ||
-        body.extendedTextMessage?.text ||
-        ''
+      }, message)
+
+    } else if (type === 'extendedTextMessage' || type === 'conversation') {
+      const text = body.conversation || body.extendedTextMessage?.text || ''
 
       await sendToSelf(sock, {
         text: `${caption}\n${text}`
-      })
+      }, message)
     }
 
-    console.log('✅ STATUS COPIED TO MESSAGE YOURSELF')
+    console.log('✅ STATUS COPIED TO SELF WITH ORIGINAL REFERENCE')
   } catch (error) {
-    console.error('STATUS SAVE FAILED:', error.message)
+    console.error('STATUS SAVE FAILED:', error)
   }
 }
 
