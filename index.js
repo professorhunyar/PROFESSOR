@@ -185,7 +185,6 @@ async function sendToSelf(sock, content, quotedMessage = null) {
     quotedMessage ? { quoted: quotedMessage } : {}
   )
 }
-}
 // ANTI DELETE
 async function sendAntiDelete(sock, protocolMessage) {
   const key = protocolMessage?.key
