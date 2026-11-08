@@ -19,7 +19,7 @@ const MAX_CACHE = 1000
 const messageCache = new Map()
 const savedStatusKeys = new Set()
 const activePresenceChats = new Set()
-
+const contactNames = new Map()
 fs.mkdirSync(DATA_DIR, { recursive: true })
 
 let settings = {
@@ -841,7 +841,21 @@ async function connect() {
   }
 
   sock.ev.on('creds.update', saveCreds)
+sock.ev.on('contacts.upsert', contacts => {
+  for (const contact of contacts) {
+    if (contact.id && (contact.name || contact.notify)) {
+      contactNames.set(contact.id, contact.name || contact.notify)
+    }
+  }
+})
 
+sock.ev.on('contacts.update', contacts => {
+  for (const contact of contacts) {
+    if (contact.id && (contact.name || contact.notify)) {
+      contactNames.set(contact.id, contact.name || contact.notify)
+    }
+  }
+})
   sock.ev.on('connection.update', async ({
     connection,
     lastDisconnect,
