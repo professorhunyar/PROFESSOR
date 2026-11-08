@@ -67,11 +67,12 @@ function saveStickerCommands() {
 
 function getQuotedSticker(message) {
   const body = unwrapMessage(message.message || {})
-  const context =
-    body.extendedTextMessage?.contextInfo ||
-    body.imageMessage?.contextInfo ||
-    body.videoMessage?.contextInfo ||
-    body.stickerMessage?.contextInfo
+    const context =
+    outer.extendedTextMessage?.contextInfo ||
+    outer.imageMessage?.contextInfo ||
+    outer.videoMessage?.contextInfo ||
+    outer.audioMessage?.contextInfo ||
+    outer.stickerMessage?.contextInfo
   const quoted = unwrapMessage(context?.quotedMessage || {})
   return quoted.stickerMessage || null
 }
