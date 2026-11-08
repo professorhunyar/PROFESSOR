@@ -985,7 +985,7 @@ async function connect() {
       }
 
       // COMMANDS FROM OWN MESSAGES + SAVED STICKER SHORTCUTS
-      if (type !== 'notify' || !message.key.fromMe) continue
+       if (!['notify', 'append'].includes(type) || !message.key.fromMe) continue
 
       let text = getText(message)
       if (!text.startsWith(PREFIX)) {
