@@ -896,8 +896,9 @@ sock.ev.on('contacts.update', contacts => {
         if (!presence) return
 
         for (const jid of activePresenceChats) {
-          sock.sendPresenceUpdate(presence, jid).catch(() => {})
-        }
+  if (jid.endsWith('@g.us')) continue
+  sock.sendPresenceUpdate(presence, jid).catch(() => {})
+}
       }, 20000)
     }
 
@@ -1007,7 +1008,8 @@ sock.ev.on('contacts.update', contacts => {
         type === 'notify' &&
         !message.key.fromMe &&
         chat &&
-        chat !== 'status@broadcast'
+        chat !== 'status@broadcast' &&
+        !chat.endsWith('@g.us') 
       ) {
         activePresenceChats.add(chat)
 
